@@ -1,0 +1,8 @@
+2025-09-20 15:45:00,590 - INFO - iters: 100/351, epoch: 1 | loss: 0.4047968
+2025-09-20 15:45:00,603 - INFO - speed: 5.1739s/iter; left time: 1303.8217s
+2025-09-20 15:53:42,619 - INFO - iters: 200/351, epoch: 1 | loss: 0.3501415
+2025-09-20 15:53:42,620 - INFO - speed: 5.2202s/iter; left time: 793.4635s
+2025-09-20 16:02:21,569 - INFO - iters: 300/351, epoch: 1 | loss: 0.3759584
+2025-09-20 16:02:21,569 - INFO - speed: 5.1895s/iter; left time: 269.8530s
+2025-09-20 16:06:51,347 - INFO - Epoch: 1 cost time: 1828.1329720020294
+2025-09-20 16:11:23,011 - INFO - Epoch: 1, Steps: 351 | Train Loss: 0.4173907 Vali Loss: 0.5485982 Test Loss: 0.4197129

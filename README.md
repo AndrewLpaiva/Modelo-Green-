@@ -1,3 +1,92 @@
+# Resumo executivo (1 frase)
+
+O pipeline principal é: executar run.py → parse dos argumentos → run.py escolhe uma classe Exp_* em exp → Exp_*._get_data() chama data_provider() que cria um DataLoader → Exp_*._build_model() instancia um modelo de models → Exp_*.train() itera batches do DataLoader e chama self.model(...) → checkpoints e resultados são salvos em ./checkpoints/<setting>/ e ./results/ ou ./test_results/.
+Fluxo detalhado (componentes e conexão)
+
+Pontos de entrada e controle
+run.py — script principal. Você roda este arquivo com flags CLI. Ele:
+Define e parseia todas as flags (dados, modelo, treino, GPU, etc.).
+Ajusta args.use_gpu e args.device_ids se multi-GPU.
+Seleciona a classe de experimento (Exp_Long_Term_Forecast, Exp_Imputation, etc.) com base em --task_name.
+Para cada repetição (args.itr): cria exp = Exp(args), constrói setting (nome único do experimento) e chama exp.train(setting) seguido de exp.test(setting).
+Classe base
+exp_basic.py (classe Exp_Basic):
+Possui model_dict mapeando nomes de modelos para módulos em models.
+_acquire_device() define o device GPU/CPU e configura CUDA_VISIBLE_DEVICES.
+Ao instanciar Exp_*, Exp_Basic chama _build_model() (implementado nas subclasses) e move o modelo para self.device.
+Data loading
+data_factory.py:
+Mapeia args.data para classes de Dataset (em data_provider), ex.: 'm4' → Dataset_M4, 'Global_Weather_Station' → Dataset_Weather_Stations.
+data_provider(args, flag) cria e retorna (data_set, data_loader).
+Diferenças por args.task_name:
+Para anomaly_detection e classification e global_forecast o batch_size e drop_last são tratados de forma específica.
+global_forecast usa um MyRandomSampler customizado e train_steps (loop por iterações, não por épocas completas).
+m4 pode ter drop_last=False.
+O DataLoader fornece batches como tuples de tensores (ex.: (batch_x, batch_y, batch_x_mark, batch_y_mark)), formando a entrada que os Exp_* esperam.
+Experimentos (exp)
+Cada arquivo exp_* contém:
+_build_model() — cria o modelo (via self.model_dict[self.args.model].Model(self.args)).
+_get_data(flag) — chama data_provider(args, flag).
+_select_optimizer(), _select_criterion() — otimizador/perda.
+train(setting), vali(...), test(setting) — comportamento específico.
+Diferenças principais entre Exp_*:
+Exp_Long_Term_Forecast: treino por épocas, validação e EarlyStopping, salva checkpoint.
+Exp_Short_Term_Forecast: perdas customizadas (MAPE/SMAPE/MASE) e ajuste para M4 dataset.
+Exp_Imputation: aplica máscaras aleatórias (com mask_rate) e calcula perda só nos pontos mascarados.
+Exp_Global_Forecast: usa train_steps (itera por steps via next(train_loader)), sampler customizado, logging, e validações periódicas; salva checkpoints periodicamente.
+Exp_Classification: ajusta seq_len/enc_in/num_class baseado nos dados, usa CrossEntropyLoss e valida por acurácia.
+Exp_Anomaly_Detection: treina reconstrução e avalia anomalias através de thresholding sobre o erro de reconstrução.
+Modelos
+models contém implementações (cada módulo exporta uma classe Model):
+Ex.: Pyraformer.py, Autoformer.py, TimesNet.py, etc.
+Exp_Basic seleciona o modelo via self.model_dict[self.args.model].
+O contrato: o modelo recebe entradas conforme a task (p.ex. model(batch_x, batch_x_mark, dec_inp, batch_y_mark)), e retorna previsões (formato esperado por cada Exp_*).
+Utils
+print_args.py: função print_args(args) imprime um resumo legível dos argumentos.
+tools.py: funções utilitárias:
+adjust_learning_rate(...), EarlyStopping, StandardScaler, visual(), adjustment() etc.
+Checkpoints e outputs
+Checkpoints: salvo por EarlyStopping.save_checkpoint em path + '/checkpoint.pth' onde path = os.path.join(args.checkpoints, setting).
+Resultados: Exp_* salvam métricas/outputs em ./results/<setting>/, ./test_results/<setting>/, ou arquivos texto (result_*.txt).
+Log: Exp_Global_Forecast usa utils.logger.Logger para file logging. Outros impressões vão para stdout.
+Guia passo-a-passo para treinar (recomendado)
+
+Preparar dados
+
+Garantir args.root_path e args.data_path corretos. Ex.: para ETT dataset configure --root_path ./data/ETT/ --data_path ETTh1.csv.
+Para WEATHER-5K (Global_Weather_Station), use --data Global_Weather_Station e ajuste --root_path se necessário.
+Escolher tarefa e modelo
+
+Escolha --task_name (um dos suportados) e --model (por exemplo Pyraformer, Autoformer).
+Ex.: previsão longa com Pyraformer:
+Para global forecast:
+Rodar e monitorar
+
+Observe o stdout e o diretório ./checkpoints/<setting>/.
+Se quiser salvar logs, ajuste --checkpoints para uma pasta com permissão de escrita.
+Testar/avaliar
+
+Após o treino run.py chama exp.test(setting) automaticamente quando --is_training 1.
+Para rodar só o teste em um checkpoint existente:
+Certifique-se de reproduzir exatamente os argumentos que geraram o setting para localizar o checkpoint.
+Dicas de debugging e reprodução
+
+Comece com poucos epochs e batch_size pequeno para validar pipeline:
+--train_epochs 1 --batch_size 2
+Para ver formas e fluxo: coloque import pdb; pdb.set_trace() em pontos do Exp_* (ex.: início do train()).
+Verifique o setting impresso para confirmar onde o checkpoint será salvo.
+Para usar GPU: --use_gpu True. Para multi-GPU: --use_multi_gpu --devices "0,1".
+Logs de NaN: alguns Exp_* chamam pdb.set_trace() se torch.isnan(loss) acontecer.
+Próximos passos que eu posso fazer por você
+
+Gerar exemplos de comandos prontos para cada Exp_* (com valores sugeridos).
+Adicionar uma flag --resume no run.py para retomar treino a partir de checkpoint.pth.
+Criar um README mais prático (comandos de uso e checklist pré-treino).
+Quer que eu:
+
+(A) gere os comandos prontos para cada Exp_* agora; ou
+(B) implemente um --resume em run.py e atualize o código com testes rápidos?
+GPT-5 mini • 0x
 #  WEATHER-5K Benchmark 
 ## Paper: [WEATHER-5K: A Large-scale Global Station Weather Dataset Towards Comprehensive Time-series Forecasting Benchmark](https://arxiv.org/abs/2406.14399)
 

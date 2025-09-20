@@ -1,36 +1,37 @@
 import os
 import torch
-from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer, DLinear, FEDformer, \
-    Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM, iTransformer, \
-    Koopa, TiDE, FreTS, Corrformer, Mamba
+import importlib
+
+
+# Dynamically import model modules from the `models` package.
+# If a model's submodule or symbol fails to import (missing optional deps), we skip it
+# so the experiment framework can still run with the available models.
+MODEL_NAMES = [
+    'TimesNet', 'Autoformer', 'Transformer', 'Nonstationary_Transformer', 'DLinear', 'FEDformer',
+    'Informer', 'LightTS', 'Reformer', 'ETSformer', 'Pyraformer', 'PatchTST', 'MICN', 'Crossformer',
+    'FiLM', 'iTransformer', 'Koopa', 'TiDE', 'FreTS', 'Corrformer', 'Mamba'
+]
+
+
+def _load_available_models():
+    model_dict = {}
+    for name in MODEL_NAMES:
+        try:
+            module = importlib.import_module(f'models.{name}')
+            # Register the module object so calling code can access module.Model
+            model_dict[name] = module
+        except Exception:
+            # Skip models that cannot be imported due to optional dependencies
+            # (e.g. Mamba requiring mamba_ssm). This avoids failing startup.
+            continue
+    return model_dict
 
 
 class Exp_Basic(object):
     def __init__(self, args):
         self.args = args
-        self.model_dict = {
-            'TimesNet': TimesNet,
-            'Autoformer': Autoformer,
-            'Transformer': Transformer,
-            'Nonstationary_Transformer': Nonstationary_Transformer,
-            'DLinear': DLinear,
-            'FEDformer': FEDformer,
-            'Informer': Informer,
-            'LightTS': LightTS,
-            'Reformer': Reformer,
-            'ETSformer': ETSformer,
-            'PatchTST': PatchTST,
-            'Pyraformer': Pyraformer,
-            'MICN': MICN,
-            'Crossformer': Crossformer,
-            'FiLM': FiLM,
-            'iTransformer': iTransformer,
-            'Koopa': Koopa,
-            'TiDE': TiDE,
-            'FreTS': FreTS,
-            'Corrformer': Corrformer,
-            'Mamba': Mamba,
-        }
+        # Build model dict from available model modules
+        self.model_dict = _load_available_models()
         self.device = self._acquire_device()
         self.model = self._build_model().to(self.device)
 

@@ -61,9 +61,53 @@ class Dataset_ETT_hour(Dataset):
             df_data = df_raw[[self.target]]
 
         if self.scale:
-            train_data = df_data[border1s[0]:border2s[0]]
-            self.scaler.fit(train_data.values)
-            data = self.scaler.transform(df_data.values)
+            # try to load existing scaler for this data file, otherwise fit and save
+            scalers_dir = os.path.join(os.getcwd(), 'scalers')
+            try:
+                os.makedirs(scalers_dir, exist_ok=True)
+            except Exception:
+                pass
+            base_name = os.path.splitext(os.path.basename(self.data_path))[0]
+            scaler_file = os.path.join(scalers_dir, f"{base_name}_scaler.npz")
+
+            if os.path.exists(scaler_file):
+                try:
+                    npz = np.load(scaler_file)
+                    # create a fresh sklearn StandardScaler and assign attributes
+                    self.scaler = StandardScaler()
+                    self.scaler.mean_ = npz['mean']
+                    self.scaler.scale_ = npz['scale']
+                    if 'var' in npz:
+                        self.scaler.var_ = npz['var']
+                    if 'n_features_in' in npz:
+                        try:
+                            self.scaler.n_features_in_ = int(npz['n_features_in'])
+                        except Exception:
+                            pass
+                    data = self.scaler.transform(df_data.values)
+                except Exception:
+                    # fallback: fit and save
+                    train_data = df_data[border1s[0]:border2s[0]]
+                    self.scaler.fit(train_data.values)
+                    data = self.scaler.transform(df_data.values)
+                    try:
+                        save_dict = {'mean': self.scaler.mean_, 'scale': self.scaler.scale_, 'n_features_in': getattr(self.scaler, 'n_features_in_', df_data.shape[1])}
+                        if hasattr(self.scaler, 'var_'):
+                            save_dict['var'] = self.scaler.var_
+                        np.savez(scaler_file, **save_dict)
+                    except Exception:
+                        pass
+            else:
+                train_data = df_data[border1s[0]:border2s[0]]
+                self.scaler.fit(train_data.values)
+                data = self.scaler.transform(df_data.values)
+                try:
+                    save_dict = {'mean': self.scaler.mean_, 'scale': self.scaler.scale_, 'n_features_in': getattr(self.scaler, 'n_features_in_', df_data.shape[1])}
+                    if hasattr(self.scaler, 'var_'):
+                        save_dict['var'] = self.scaler.var_
+                    np.savez(scaler_file, **save_dict)
+                except Exception:
+                    pass
         else:
             data = df_data.values
 
@@ -234,9 +278,10 @@ class Dataset_Custom(Dataset):
         cols.remove(self.target)
         cols.remove('date')
         df_raw = df_raw[['date'] + cols + [self.target]]
+        # split: 70% train, 20% validation, 10% test
         num_train = int(len(df_raw) * 0.7)
-        num_test = int(len(df_raw) * 0.2)
-        num_vali = len(df_raw) - num_train - num_test
+        num_vali = int(len(df_raw) * 0.2)
+        num_test = len(df_raw) - num_train - num_vali
 
         border1s = [0, num_train - self.seq_len, len(df_raw) - num_test - self.seq_len]
         border2s = [num_train, num_train + num_vali, len(df_raw)]

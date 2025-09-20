@@ -36,14 +36,22 @@ class EarlyStopping:
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
+        self.val_loss_min = np.inf
         self.delta = delta
 
-    def __call__(self, val_loss, model, path):
+    def __call__(self, val_loss, model, path, optimizer=None, epoch=None, extra_dir=None):
+        """
+        val_loss: current validation loss
+        model: torch nn.Module
+        path: legacy path where the original state_dict is saved (./checkpoints/<setting>)
+        optimizer: optional optimizer to save state
+        epoch: optional current epoch index
+        extra_dir: optional extra directory to save a full checkpoint (model+optimizer+epoch)
+        """
         score = -val_loss
         if self.best_score is None:
             self.best_score = score
-            self.save_checkpoint(val_loss, model, path)
+            self.save_checkpoint(val_loss, model, path, optimizer=optimizer, epoch=epoch, extra_dir=extra_dir)
         elif score < self.best_score + self.delta:
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
@@ -51,13 +59,49 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
-            self.save_checkpoint(val_loss, model, path)
+            self.save_checkpoint(val_loss, model, path, optimizer=optimizer, epoch=epoch, extra_dir=extra_dir)
             self.counter = 0
 
-    def save_checkpoint(self, val_loss, model, path):
+    def save_checkpoint(self, val_loss, model, path, optimizer=None, epoch=None, extra_dir=None):
+        """
+        Legacy behavior: save model.state_dict() at `path/checkpoint.pth` so existing code that
+        expects that file keeps working.
+
+        New behavior: also save a full checkpoint dict containing optimizer state and epoch to
+        `extra_dir/checkpoint_full.pth` (or to `path/checkpoint_full.pth` if extra_dir is None).
+        """
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-        torch.save(model.state_dict(), path + '/' + 'checkpoint.pth')
+
+        # Ensure path exists
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            pass
+
+        # Legacy: save only model.state_dict() for compatibility
+        torch.save(model.state_dict(), os.path.join(path, 'checkpoint.pth'))
+
+        # Save a full checkpoint (model + optimizer + epoch + val_loss)
+        full_ckpt = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'val_loss': val_loss,
+        }
+        if optimizer is not None:
+            try:
+                full_ckpt['optimizer_state_dict'] = optimizer.state_dict()
+            except Exception:
+                # optimizer may not be serializable in some edge cases; ignore if so
+                pass
+
+        save_dir = extra_dir if extra_dir is not None else path
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        torch.save(full_ckpt, os.path.join(save_dir, 'checkpoint_full.pth'))
         self.val_loss_min = val_loss
 
 

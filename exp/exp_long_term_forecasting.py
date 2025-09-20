@@ -11,7 +11,75 @@ import warnings
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import sys
 warnings.filterwarnings('ignore')
+import logging
+from collections import Counter
+
+
+def _create_versioned_dirs_and_move_log(base_model_dir, base_logs_dir, tmp_log_path, logger=None, formatter=None):
+    """Create next vXX dirs under base_model_dir/base_logs_dir, move tmp_log_path to final
+    logs_dir and return (model_dir, logs_dir, final_log_path).
+    If logger and formatter are provided, reattach FileHandler to the logger pointing to final_log_path.
+    """
+    if not os.path.exists(base_model_dir):
+        os.makedirs(base_model_dir, exist_ok=True)
+    if not os.path.exists(base_logs_dir):
+        os.makedirs(base_logs_dir, exist_ok=True)
+
+    # compute next version by inspecting both model and log dirs so they stay in sync
+    def _versions_in(dir_path):
+        if not os.path.exists(dir_path):
+            return []
+        names = [n for n in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, n))]
+        vers = []
+        for n in names:
+            if n.startswith('v'):
+                try:
+                    vers.append(int(n[1:]))
+                except Exception:
+                    continue
+        return vers
+
+    vers_model = _versions_in(base_model_dir)
+    vers_logs = _versions_in(base_logs_dir)
+    all_vers = vers_model + vers_logs
+    next_v = max(all_vers) + 1 if all_vers else 1
+    model_dir = os.path.join(base_model_dir, f'v{next_v:02d}')
+    logs_dir = os.path.join(base_logs_dir, f'v{next_v:02d}')
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+
+    final_log_path = os.path.join(logs_dir, 'train_log.txt')
+    try:
+        import shutil
+        shutil.move(tmp_log_path, final_log_path)
+    except Exception:
+        # If move fails, try copying
+        try:
+            shutil.copy(tmp_log_path, final_log_path)
+        except Exception:
+            pass
+
+    # reattach file handler to logger if requested
+    if logger is not None and formatter is not None:
+        try:
+            # remove any existing file handlers
+            for h in list(logger.handlers):
+                if isinstance(h, logging.FileHandler):
+                    try:
+                        logger.removeHandler(h)
+                        h.close()
+                    except Exception:
+                        pass
+            fh = logging.FileHandler(final_log_path, mode='a', encoding='utf-8')
+            fh.setLevel(logging.INFO)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+        except Exception:
+            pass
+
+    return model_dir, logs_dir, final_log_path
 
 
 class Exp_Long_Term_Forecast(Exp_Basic):
@@ -41,7 +109,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         total_loss = []
         self.model.eval()
         with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(tqdm(vali_loader, desc='Validation', total=len(vali_loader), unit='batch')):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float()
 
@@ -79,13 +147,69 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return total_loss
 
     def train(self, setting):
+        # On Windows, avoid spawning worker processes which can trigger
+        # multiprocessing import issues; force single-process data loading.
+        if sys.platform.startswith('win'):
+            self.args.num_workers = 0
+
         train_data, train_loader = self._get_data(flag='train')
         vali_data, vali_loader = self._get_data(flag='val')
         test_data, test_loader = self._get_data(flag='test')
 
+        # Create legacy checkpoint path and new versioned model/log directories
         path = os.path.join(self.args.checkpoints, setting)
-        if not os.path.exists(path):
-            os.makedirs(path)
+        os.makedirs(path, exist_ok=True)
+
+        # create versioned directories for trained model and logs
+        base_model_dir = os.path.join('modelos_treinados', setting)
+        base_logs_dir = os.path.join('logs', setting)
+        # determine next version number by scanning existing dirs
+        def _next_version(base_dir):
+            if not os.path.exists(base_dir):
+                return 1
+            names = [n for n in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, n))]
+            vers = []
+            for n in names:
+                if n.startswith('v'):
+                    try:
+                        vers.append(int(n[1:]))
+                    except Exception:
+                        continue
+            return max(vers) + 1 if vers else 1
+
+        # We'll create versioned model/log directories lazily after the first epoch
+        # so we avoid creating unused vXX folders. First, set up logging to
+        # stdout and to a temporary log file under `logs/<setting>/tmp/train_log.txt`.
+        logger = logging.getLogger('train_logger')
+        logger.setLevel(logging.INFO)
+        # remove existing handlers
+        if logger.handlers:
+            for h in list(logger.handlers):
+                try:
+                    logger.removeHandler(h)
+                    h.close()
+                except Exception:
+                    pass
+
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+        # temp logs dir
+        tmp_logs_dir = os.path.join(base_logs_dir, 'tmp')
+        os.makedirs(tmp_logs_dir, exist_ok=True)
+        fh_path = os.path.join(tmp_logs_dir, 'train_log.txt')
+        fh = logging.FileHandler(fh_path, mode='a', encoding='utf-8')
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+
+        # lazy creation state
+        version_created = False
+        model_dir = None
+        logs_dir = None
 
         time_now = time.time()
 
@@ -104,7 +228,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             self.model.train()
             epoch_time = time.time()
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+            # Visual progress bar for training loop
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch+1} Train', total=train_steps, unit='batch')):
                 iter_count += 1
                 model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device).squeeze(0)
@@ -144,10 +269,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
-                    print("\titers: {0}/{1}, epoch: {2} | loss: {3:.7f}".format(i + 1,train_steps, epoch + 1, loss.item()))
+                    logger.info("iters: {0}/{1}, epoch: {2} | loss: {3:.7f}".format(i + 1, train_steps, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
-                    print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                    logger.info('speed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
                     iter_count = 0
                     time_now = time.time()
 
@@ -159,22 +284,101 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     loss.backward()
                     model_optim.step()
 
-            print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+            logger.info("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
+            # Validation with progress bar
             vali_loss = self.vali(vali_data, vali_loader, criterion)
             test_loss = self.vali(test_data, test_loader, criterion)
 
-            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
+            # On first epoch end, create versioned directories and move temp log
+            if not version_created:
+                v_model = _next_version(base_model_dir)
+                v_logs = _next_version(base_logs_dir)
+                model_dir = os.path.join(base_model_dir, f'v{v_model:02d}')
+                logs_dir = os.path.join(base_logs_dir, f'v{v_logs:02d}')
+                os.makedirs(model_dir, exist_ok=True)
+                os.makedirs(logs_dir, exist_ok=True)
+
+                # move temporary log file into the new logs_dir
+                final_log_path = os.path.join(logs_dir, 'train_log.txt')
+                try:
+                    import shutil
+                    # flush and close the current file handler before moving
+                    for h in list(logger.handlers):
+                        if isinstance(h, logging.FileHandler):
+                            try:
+                                h.flush()
+                                h.close()
+                            except Exception:
+                                pass
+                            try:
+                                logger.removeHandler(h)
+                            except Exception:
+                                pass
+                    # move temp log
+                    shutil.move(fh_path, final_log_path)
+                    # attach new FileHandler pointing to final log
+                    fh = logging.FileHandler(final_log_path, mode='a', encoding='utf-8')
+                    fh.setLevel(logging.INFO)
+                    fh.setFormatter(formatter)
+                    logger.addHandler(fh)
+                    fh_path = final_log_path
+                except Exception:
+                    # if move fails, keep logging to temp
+                    pass
+                version_created = True
+
+            logger.info("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss, test_loss))
-            early_stopping(vali_loss, self.model, path)
+            # pass optimizer and epoch and a full checkpoint directory to EarlyStopping
+            early_stopping(vali_loss, self.model, path, optimizer=model_optim, epoch=epoch + 1, extra_dir=model_dir)
             if early_stopping.early_stop:
                 print("Early stopping")
                 break
 
             adjust_learning_rate(model_optim, epoch + 1, self.args)
 
-        best_model_path = path + '/' + 'checkpoint.pth'
-        self.model.load_state_dict(torch.load(best_model_path))
+        best_model_path = os.path.join(path, 'checkpoint.pth')
+        # load best model weights (legacy) into the model
+        self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
+
+        # also copy full checkpoint if exists into model_dir for provenance
+        full_ckpt_src = os.path.join(path, 'checkpoint_full.pth')
+        if os.path.exists(full_ckpt_src):
+            try:
+                import shutil
+                shutil.copy(full_ckpt_src, os.path.join(model_dir, 'checkpoint_full.pth'))
+            except Exception:
+                pass
+
+        # Ensure file handler is flushed and closed so the log file contains the run output
+        try:
+            for h in list(logger.handlers):
+                if isinstance(h, logging.FileHandler):
+                    try:
+                        h.flush()
+                        h.close()
+                    except Exception:
+                        pass
+                    try:
+                        logger.removeHandler(h)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Explicitly append a final summary line to the log file to avoid empty files
+        try:
+            with open(fh_path, 'a', encoding='utf-8') as wf:
+                wf.write(f"Run completed for setting: {setting}\n")
+        except Exception:
+            pass
+
+        # Ensure logging subsystem flushes
+        try:
+            logging.shutdown()
+        except Exception:
+            pass
 
         return self.model
 
