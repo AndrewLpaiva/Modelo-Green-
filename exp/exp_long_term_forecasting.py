@@ -17,6 +17,26 @@ import logging
 from collections import Counter
 
 
+def _safe_torch_load(path, map_location=None):
+    """Robust loader for checkpoints. Some checkpoints are full dicts saved by
+    older code and may require `weights_only=False` when loading with newer
+    PyTorch. Try the default load first, then retry with `weights_only=False`.
+    Returns the loaded object.
+    """
+    try:
+        return torch.load(path, map_location=map_location)
+    except TypeError:
+        # Older PyTorch may not accept weights_only kw; re-raise to let caller handle
+        raise
+    except Exception:
+        # Try explicit weights_only=False for PyTorch>=2.6 where default changed
+        try:
+            return torch.load(path, map_location=map_location, weights_only=False)
+        except Exception:
+            # As a last resort, re-raise the original exception
+            return torch.load(path, map_location=map_location)
+
+
 def _create_versioned_dirs_and_move_log(base_model_dir, base_logs_dir, tmp_log_path, logger=None, formatter=None):
     """Create next vXX dirs under base_model_dir/base_logs_dir, move tmp_log_path to final
     logs_dir and return (model_dir, logs_dir, final_log_path).
@@ -339,8 +359,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             adjust_learning_rate(model_optim, epoch + 1, self.args)
 
         best_model_path = os.path.join(path, 'checkpoint.pth')
-        # load best model weights (legacy) into the model
-        self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
+        # load best model weights (legacy) into the model robustly
+        ck = _safe_torch_load(best_model_path, map_location=self.device)
+        if isinstance(ck, dict) and 'model_state_dict' in ck:
+            sd = ck['model_state_dict']
+        else:
+            sd = ck
+        self.model.load_state_dict(sd)
 
         # also copy full checkpoint if exists into model_dir for provenance
         full_ckpt_src = os.path.join(path, 'checkpoint_full.pth')
@@ -386,20 +411,23 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            ck = _safe_torch_load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth'), map_location=self.device)
+            if isinstance(ck, dict) and 'model_state_dict' in ck:
+                sd = ck['model_state_dict']
+            else:
+                sd = ck
+            self.model.load_state_dict(sd)
 
         preds = []
         trues = []
         folder_path = './test_results/' + setting + '/'
-        import pdb
-        pdb.set_trace()
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
         metric_multi = MultiMetricsCalculator()
         self.model.eval()
         with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in tqdm(enumerate(test_loader), \
-                desc="Calculating metrics", total=len(test_loader), unit="site"):
+            # iterate with a readable progress bar
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(tqdm(test_loader, desc="Testing", total=len(test_loader), unit="batch")):
 
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
@@ -420,48 +448,54 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 else:
                     if self.args.output_attention:
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-
                     else:
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, :]
-                batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                batch_y_proc = batch_y[:, -self.args.pred_len:, :].to(self.device)
                 outputs = outputs.detach().cpu().numpy()
-                batch_y = batch_y.detach().cpu().numpy()
+                batch_y_np = batch_y_proc.detach().cpu().numpy()
                 if test_data.scale and self.args.inverse:
                     shape = outputs.shape
                     outputs = test_data.inverse_transform(outputs.squeeze(0)).reshape(shape)
-                    batch_y = test_data.inverse_transform(batch_y.squeeze(0)).reshape(shape)
-        
+                    batch_y_np = test_data.inverse_transform(batch_y_np.squeeze(0)).reshape(shape)
+
                 outputs = outputs[:, :, f_dim:]
-                batch_y = batch_y[:, :, f_dim:]
+                batch_y_np = batch_y_np[:, :, f_dim:]
 
                 pred = outputs
-                true = batch_y
+                true = batch_y_np
 
                 preds.append(pred)
                 trues.append(true)
 
                 metric_multi.update(pred, true)
                 if i % 20 == 0:
-                    input = batch_x.detach().cpu().numpy()
+                    input_np = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
-                        shape = input.shape
-                        input = test_data.inverse_transform(input.squeeze(0)).reshape(shape)
-                    gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
-                    pred = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
-                    visual(gt, pred, os.path.join(folder_path, str(i) + '.pdf'))
-        avg_mae, avg_mse = metric_multi.get_metrics()
-        # creat a dataFrame to save mutli-metrics
-        metrics_df = pd.DataFrame({'Variable': ['Temperature', 'Humidity', 'Wind Speed', 'Pressure','Wind Direction'],
-                                'MAE': avg_mae.tolist(),
-                                'MSE': avg_mse.tolist()})
+                        shape = input_np.shape
+                        input_np = test_data.inverse_transform(input_np.squeeze(0)).reshape(shape)
+                    gt = np.concatenate((input_np[0, :, -1], true[0, :, -1]), axis=0)
+                    pred_vis = np.concatenate((input_np[0, :, -1], pred[0, :, -1]), axis=0)
+                    visual(gt, pred_vis, os.path.join(folder_path, str(i) + '.pdf'))
+
+        avg_mae, avg_mse, sedi = metric_multi.get_metrics()
+        # sedi has shape (num_thresholds, num_vars); reduce to per-variable by averaging
+        try:
+            sedi_per_var = np.mean(sedi, axis=0)
+        except Exception:
+            sedi_per_var = np.zeros_like(avg_mae)
+
+        # create a DataFrame to save multi-metrics (include SEDI averaged per variable)
+        metrics_df = pd.DataFrame({'Variable': ['Temperature', 'Humidity', 'Wind Speed', 'Pressure', 'Wind Direction'],
+                                   'MAE': avg_mae.tolist(),
+                                   'MSE': avg_mse.tolist(),
+                                   'SEDI': sedi_per_var.tolist()})
         print(metrics_df)
+
         preds = np.array(preds)
         trues = np.array(trues)
-        import pdb
-        pdb.set_trace()
         print('test shape:', preds.shape, trues.shape)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
@@ -474,12 +508,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         mae, mse, rmse, mape, mspe = metric(preds, trues)
         print('mse:{}, mae:{}'.format(mse, mae))
-        f = open("result_long_term_forecast.txt", 'a')
-        f.write(setting + "  \n")
-        f.write('mse:{}, mae:{}'.format(mse, mae))
-        f.write('\n')
-        f.write('\n')
-        f.close()
+        with open("result_long_term_forecast.txt", 'a') as f:
+            f.write(setting + "  \n")
+            f.write('mse:{}, mae:{}'.format(mse, mae))
+            f.write('\n\n')
 
         np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
         np.save(folder_path + 'pred.npy', preds)

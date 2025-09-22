@@ -71,6 +71,13 @@ class Overall_Metrics:
         return mae, mse, rmse, mape, mspe
 
 def SEDI(predicted_values, true_values, percentile):
+    # If percentile is None (not provided during simple test runs),
+    # return zero-count arrays with the expected shape so callers can
+    # safely accumulate without special-casing.
+    if percentile is None:
+        # default to 4 event thresholds and 5 variables (legacy)
+        return np.zeros((4, 5)), np.zeros((4, 5))
+
     percentile = percentile.numpy()
     num_percentile = percentile.shape[-1]
     weight = np.array([ [0.5,0.5],
@@ -123,7 +130,9 @@ class MultiMetricsCalculator:
     def get_metrics(self):
         avg_mae = self.mae / self.count
         avg_mse = self.mse / self.count
-        SEDI = self.SEDI_pred / self.SEDI_gt
+        # avoid divide-by-zero when no events were counted
+        safe_den = np.where(self.SEDI_gt == 0, 1, self.SEDI_gt)
+        SEDI = self.SEDI_pred / safe_den
         return avg_mae, avg_mse, SEDI
 
 # 创建一个 WeatherMetricsCalculator 对象
