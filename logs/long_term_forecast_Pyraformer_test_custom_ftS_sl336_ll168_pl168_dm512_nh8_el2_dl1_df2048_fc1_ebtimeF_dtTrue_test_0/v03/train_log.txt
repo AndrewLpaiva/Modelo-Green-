@@ -1,0 +1,9 @@
+2025-09-22 15:15:42,522 - INFO - iters: 100/351, epoch: 1 | loss: 0.2920840
+2025-09-22 15:15:42,535 - INFO - speed: 7.4926s/iter; left time: 1888.1266s
+2025-09-22 15:28:39,263 - INFO - iters: 200/351, epoch: 1 | loss: 0.3304376
+2025-09-22 15:28:39,268 - INFO - speed: 7.7673s/iter; left time: 1180.6331s
+2025-09-22 15:42:09,270 - INFO - iters: 300/351, epoch: 1 | loss: 0.3328090
+2025-09-22 15:42:09,279 - INFO - speed: 8.1001s/iter; left time: 421.2052s
+2025-09-22 15:48:45,749 - INFO - Epoch: 1 cost time: 2732.466394662857
+2025-09-22 15:53:21,687 - INFO - Epoch: 1, Steps: 351 | Train Loss: 0.3017042 Vali Loss: 0.4940844 Test Loss: 0.4217389
+Run completed for setting: long_term_forecast_Pyraformer_test_custom_ftS_sl336_ll168_pl168_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0
