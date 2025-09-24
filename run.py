@@ -37,6 +37,7 @@ if __name__ == '__main__':
     parser.add_argument('--freq', type=str, default='h',
                         help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+    parser.add_argument('--ckpt_path', type=str, default='', help='(optional) explicit checkpoint file path to load for testing')
 
     # forecasting task
     parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
@@ -80,13 +81,18 @@ if __name__ == '__main__':
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--train_steps', type=int, default=10, help='train steps')
     parser.add_argument('--val_steps', type=int, default=10000, help='interval steps for validation')
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size of train input data')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
+
+    # simplified naming for logs/model dirs
+    parser.add_argument('--simple_name', action='store_true', help='use simplified, human-friendly naming for logs and modelos_treinados', default=False)
+    parser.add_argument('--nice_prev', type=str, default='', help='(optional) previous dataset label for simplified naming, e.g. 2003')
+    parser.add_argument('--nice_new', type=str, default='', help='(optional) new dataset label for simplified naming, e.g. 2024')
 
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
@@ -128,25 +134,37 @@ if __name__ == '__main__':
     if args.is_training:
         for ii in range(args.itr):
             # setting record of experiments
-            exp = Exp(args)  # set experiments
-            setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
-                args.task_name,
-                args.model,
-                args.model_id,
-                args.data,
-                args.features,
-                args.seq_len,
-                args.label_len,
-                args.pred_len,
-                args.d_model,
-                args.n_heads,
-                args.e_layers,
-                args.d_layers,
-                args.d_ff,
-                args.factor,
-                args.embed,
-                args.distil,
-                args.des, ii)
+            # optionally create a simplified, human-friendly name when requested
+            if args.simple_name and args.nice_prev and args.nice_new:
+                # Ensure Exp instance exists when using simplified naming
+                exp = Exp(args)
+                # Example: logs-Green-2003-2024-1
+                simple = f"{args.task_name}_{args.model}_{args.model_id}_{args.data}_ft{args.features}_sl{args.seq_len}_ll{args.label_len}_pl{args.pred_len}_dm{args.d_model}_nh{args.n_heads}_el{args.e_layers}_dl{args.d_layers}_df{args.d_ff}_fc{args.factor}_eb{args.embed}_dt{args.distil}_FRetreino_{args.nice_new}_from_{args.nice_prev}"
+                setting = f"{simple}_{ii}"
+            else:
+                exp = Exp(args)  # set experiments
+                setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
+                    args.task_name,
+                    args.model,
+                    args.model_id,
+                    args.data,
+                    args.features,
+                    args.seq_len,
+                    args.label_len,
+                    args.pred_len,
+                    args.d_model,
+                    args.n_heads,
+                    args.e_layers,
+                    args.d_layers,
+                    args.d_ff,
+                    args.factor,
+                    args.embed,
+                    args.distil,
+                    args.des, ii)
+
+            # ensure Exp exists for both branches
+            if not args.simple_name or not (args.nice_prev and args.nice_new):
+                exp = Exp(args)
 
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
             exp.train(setting)

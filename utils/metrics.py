@@ -73,10 +73,15 @@ class Overall_Metrics:
 def SEDI(predicted_values, true_values, percentile):
     # If percentile is None (not provided during simple test runs),
     # return zero-count arrays with the expected shape so callers can
-    # safely accumulate without special-casing.
+    # safely accumulate without special-casing. Use the number of
+    # variables from the predicted_values shape to remain generic.
     if percentile is None:
-        # default to 4 event thresholds and 5 variables (legacy)
-        return np.zeros((4, 5)), np.zeros((4, 5))
+        # default to 4 event thresholds and use number of variables from input
+        try:
+            n_vars = predicted_values.shape[-1]
+        except Exception:
+            n_vars = 5
+        return np.zeros((4, n_vars)), np.zeros((4, n_vars))
 
     percentile = percentile.numpy()
     num_percentile = percentile.shape[-1]
@@ -106,25 +111,43 @@ def SEDI(predicted_values, true_values, percentile):
 
 class MultiMetricsCalculator:
     def __init__(self):
-        self.mae = np.zeros(5)  # 各个变量的 MAE
-        self.mse = np.zeros(5)  # 各个变量的 MSE
-        self.SEDI_pred = np.zeros((4,5))
-        self.SEDI_gt = np.zeros((4,5))
+        # Initialize lazily based on first batch shape to support
+        # datasets with arbitrary number of target variables.
+        self.mae = None
+        self.mse = None
+        self.SEDI_pred = None
+        self.SEDI_gt = None
         self.count = 0
 
     def update(self, predicted_values, true_values, percentile=None):
         absolute_errors = np.abs(predicted_values - true_values)
         squared_errors = np.square(predicted_values - true_values)
 
+        # On first update, allocate arrays sized to the number of variables
+        n_vars = predicted_values.shape[-1]
+        if self.mae is None:
+            self.mae = np.zeros(n_vars)
+            self.mse = np.zeros(n_vars)
+            self.SEDI_pred = np.zeros((4, n_vars))
+            self.SEDI_gt = np.zeros((4, n_vars))
+
         self.mae += np.mean(absolute_errors, axis=(0, 1))
         self.mse += np.mean(squared_errors, axis=(0, 1))
 
         pred_events, gt_events = SEDI(predicted_values, true_values, percentile)
-        self.SEDI_pred +=pred_events
+        # If SEDI returned shapes that don't match (defensive), align them
+        if pred_events.shape != self.SEDI_pred.shape:
+            # try to reshape or recreate arrays
+            try:
+                pred_events = pred_events.reshape(self.SEDI_pred.shape)
+                gt_events = gt_events.reshape(self.SEDI_gt.shape)
+            except Exception:
+                # fallback: ignore SEDI for this batch
+                pred_events = np.zeros_like(self.SEDI_pred)
+                gt_events = np.zeros_like(self.SEDI_gt)
+
+        self.SEDI_pred += pred_events
         self.SEDI_gt += gt_events
-        # print(self.SEDI_pred/self.SEDI_gt)
-        # import pdb
-        # pdb.set_trace()
         self.count += 1
 
     def get_metrics(self):

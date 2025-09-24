@@ -171,10 +171,32 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # multiprocessing import issues; force single-process data loading.
         if sys.platform.startswith('win'):
             self.args.num_workers = 0
-
         train_data, train_loader = self._get_data(flag='train')
         vali_data, vali_loader = self._get_data(flag='val')
         test_data, test_loader = self._get_data(flag='test')
+
+        # Warm-start: if an explicit checkpoint path is provided, load compatible
+        # parameters into the model before continuing training. This copies only
+        # parameters that exist in both state_dicts and have matching shapes.
+        if getattr(self.args, 'ckpt_path', None):
+            try:
+                ck = _safe_torch_load(self.args.ckpt_path, map_location=self.device)
+                if isinstance(ck, dict) and 'model_state_dict' in ck:
+                    ck_sd = ck['model_state_dict']
+                else:
+                    ck_sd = ck
+
+                model_sd = self.model.state_dict()
+                # build filtered dict
+                filtered = {k: v for k, v in ck_sd.items() if k in model_sd and v.size() == model_sd[k].size()}
+                if filtered:
+                    model_sd.update(filtered)
+                    self.model.load_state_dict(model_sd)
+                    print(f"Warm-start: loaded {len(filtered)} tensors from checkpoint: {self.args.ckpt_path}")
+                else:
+                    print("Warm-start: no compatible tensors found in checkpoint; skipping.")
+            except Exception as e:
+                print("Warm-start load failed:", e)
 
         # Create legacy checkpoint path and new versioned model/log directories
         path = os.path.join(self.args.checkpoints, setting)
@@ -196,6 +218,22 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     except Exception:
                         continue
             return max(vers) + 1 if vers else 1
+
+        # Pre-create versioned model/log directories immediately so they exist
+        # even if training is interrupted before the end of the first epoch.
+        try:
+            v_model = _next_version(base_model_dir)
+            v_logs = _next_version(base_logs_dir)
+            pre_model_dir = os.path.join(base_model_dir, f'v{v_model:02d}')
+            pre_logs_dir = os.path.join(base_logs_dir, f'v{v_logs:02d}')
+            os.makedirs(pre_model_dir, exist_ok=True)
+            os.makedirs(pre_logs_dir, exist_ok=True)
+            # create a tmp log file so users see something in logs/<setting>/vXX/
+            tmp_log_path = os.path.join(pre_logs_dir, 'train_log.txt')
+            open(tmp_log_path, 'a').close()
+        except Exception:
+            # If any assertion/IO error occurs, continue without failing the run
+            pass
 
         # We'll create versioned model/log directories lazily after the first epoch
         # so we avoid creating unused vXX folders. First, set up logging to
@@ -411,7 +449,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('loading model')
-            ck = _safe_torch_load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth'), map_location=self.device)
+            # Allow explicit checkpoint file path via args.ckpt_path (absolute or relative).
+            if getattr(self.args, 'ckpt_path', None):
+                ckpt_file = self.args.ckpt_path
+            else:
+                ckpt_file = os.path.join('./checkpoints/' + setting, 'checkpoint.pth')
+
+            ck = _safe_torch_load(ckpt_file, map_location=self.device)
             if isinstance(ck, dict) and 'model_state_dict' in ck:
                 sd = ck['model_state_dict']
             else:
@@ -488,10 +532,30 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             sedi_per_var = np.zeros_like(avg_mae)
 
         # create a DataFrame to save multi-metrics (include SEDI averaged per variable)
-        metrics_df = pd.DataFrame({'Variable': ['Temperature', 'Humidity', 'Wind Speed', 'Pressure', 'Wind Direction'],
-                                   'MAE': avg_mae.tolist(),
-                                   'MSE': avg_mse.tolist(),
-                                   'SEDI': sedi_per_var.tolist()})
+        # Determine number of variables from avg_mae length and generate names
+        try:
+            n_vars = len(avg_mae)
+        except Exception:
+            n_vars = 1
+        # If dataset provides variable names via test_data.columns, use them; else default Var1..VarN
+        var_names = None
+        try:
+            if hasattr(test_data, 'columns') and isinstance(test_data.columns, (list, tuple)):
+                var_names = test_data.columns
+        except Exception:
+            var_names = None
+        if not var_names:
+            var_names = [f'Var{i+1}' for i in range(n_vars)]
+
+        # Ensure arrays match n_vars
+        avg_mae = np.array(avg_mae[:n_vars]).tolist()
+        avg_mse = np.array(avg_mse[:n_vars]).tolist()
+        sedi_per_var = np.array(sedi_per_var[:n_vars]).tolist()
+
+        metrics_df = pd.DataFrame({'Variable': var_names,
+                                   'MAE': avg_mae,
+                                   'MSE': avg_mse,
+                                   'SEDI': sedi_per_var})
         print(metrics_df)
 
         preds = np.array(preds)

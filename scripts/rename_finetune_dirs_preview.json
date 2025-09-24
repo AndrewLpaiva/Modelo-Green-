@@ -1,0 +1,10 @@
+{
+  "mapping": {
+    "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\long_term_forecast_Pyraformer_Green_custom_ftS_sl336_ll168_pl168_dm512_nh8_el2_dl0_df2048_fc1_ebtimeF_dtTrue_Exp_Green_v01_0": "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\checkpoints-Green-long_term_forecast_Pyraformer_Green_cust-1",
+    "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\long_term_forecast_Pyraformer_Green_custom_ftS_sl336_ll168_pl168_dm512_nh8_el2_dl0_df2048_fc1_ebtimeF_dtTrue_FRetreino_2024_from_2023_0": "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\checkpoints-Green-long_term_forecast_Pyraformer_Green_cust-2",
+    "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\long_term_forecast_Pyraformer_Green_custom_ftS_sl336_ll168_pl168_dm512_nh8_el2_dl0_df2048_fc1_ebtimeF_dtTrue_FineTune_2002_from_2001_0": "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\checkpoints-Green-long_term_forecast_Pyraformer_Green_cust-3",
+    "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\long_term_forecast_Pyraformer_Green_custom_ftS_sl336_ll168_pl168_dm512_nh8_el2_dl0_df2048_fc1_ebtimeF_dtTrue_Retreinamento_2002_para_2003_0": "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\checkpoints-Green-long_term_forecast_Pyraformer_Green_cust-4",
+    "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\test_lazy": "C:\\Users\\supor\\Modelo-Green-\\checkpoints\\checkpoints-Green-test_lazy-1"
+  },
+  "dry_run": true
+}
